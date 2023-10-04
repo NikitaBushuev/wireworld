@@ -1,8 +1,10 @@
 #include <SDL2/SDL.h>
 
-#define WW_SIZE 16
+#define WW_PIXELSIZE 512
 
-#define WW_SCALE 32
+#define WW_SIZE 32
+
+#define WW_SCALE (WW_PIXELSIZE / WW_SIZE)
 
 enum {
     WW_CELL_NULL,
@@ -22,20 +24,19 @@ typedef struct {
 } ww_vector2_t;
 
 static const SDL_Color
-    WW_COLOR_BLACK   = {0x00, 0x00, 0x00, 0xFF},
-    WW_COLOR_YELLOW  = {0xFF, 0xFF, 0x00, 0xFF},
-    WW_COLOR_BLUE    = {0x00, 0x00, 0xFF, 0xFF},
-    WW_COLOR_RED     = {0xFF, 0x00, 0x00, 0xFF},
-    WW_COLOR_MAGENTA = {0xFF, 0x00, 0xFF, 0xFF};
+    WW_COLOR_NULL = {0x10, 0x10, 0x10, 0xFF},
+    WW_COLOR_WIRE = {0xFF, 0xFF, 0x44, 0xFF},
+    WW_COLOR_HEAD = {0x44, 0x44, 0xFF, 0xFF},
+    WW_COLOR_TAIL = {0xFF, 0x44, 0x44, 0xFF},
+    WW_COLOR_GRID = {0x20, 0x20, 0x20, 0xFF};
 
 SDL_Color ww_cell_color(ww_cell_t cell) {
     switch (cell) {
-    case WW_CELL_NULL: return WW_COLOR_BLACK;
-    case WW_CELL_WIRE: return WW_COLOR_YELLOW;
-    case WW_CELL_HEAD: return WW_COLOR_BLUE;
-    case WW_CELL_TAIL: return WW_COLOR_RED;
+    case WW_CELL_WIRE: return WW_COLOR_WIRE;
+    case WW_CELL_HEAD: return WW_COLOR_HEAD;
+    case WW_CELL_TAIL: return WW_COLOR_TAIL;
     }
-    return WW_COLOR_MAGENTA;
+    return WW_COLOR_NULL;
 }
 
 void ww_cell_render(Uint8 cell, int x, int y, SDL_Renderer *renderer) {
@@ -102,18 +103,18 @@ void ww_cell_update(ww_cell_t cell, int i, int j, ww_world_t *src, ww_world_t *d
     dst->data[i][j] = new_cell;
 }
 
-void ww_render_grid(SDL_Renderer *renderer) {
+void ww_render_grid(SDL_Renderer *renderer, SDL_Color color) {
     int w = 0, h = 0;
 
     SDL_GetRendererOutputSize(renderer, &w, &h);
     
-    SDL_SetRenderDrawColor(renderer, 0x10, 0x10, 0x10, 0xFF);
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 
-    for (int x = 0; x < 512; x += 32) {
+    for (int x = 0; x < WW_PIXELSIZE; x += WW_SCALE) {
         SDL_RenderDrawLine(renderer, x, 0, x, h);
     }
 
-    for (int y = 0; y < 512; y += 32) {
+    for (int y = 0; y < WW_PIXELSIZE; y += WW_SCALE) {
         SDL_RenderDrawLine(renderer, 0, y, w, y);
     }
 }
@@ -180,25 +181,51 @@ int ww_update_loop(ww_context_t *ctx) {
     return 0;
 }
 
+void ww_world_load(ww_world_t *world, const char *path) {
+    memset(world, 0, sizeof(ww_world_t));
+
+    FILE *fp = fopen(path, "rb");
+    // SDL_assert(fp != NULL);
+
+    fread(world, sizeof(ww_world_t), 1, fp);
+
+    fclose(fp);
+}
+
+void ww_world_save(ww_world_t *world, const char *path) {
+    FILE *fp = fopen(path, "wb");
+    SDL_assert(fp != NULL);
+
+    fwrite(world, sizeof(ww_world_t), 1, fp);
+
+    fclose(fp);
+}
+
 int main(int argc, char **argv) {
+    char title[BUFSIZ] = "WireWorld - unnamed.bin";
+
     int status = SDL_Init(SDL_INIT_EVERYTHING);
 
     SDL_assert(status == 0);
 
     ww_context_t ctx = {0};
+
+    char *path = SDL_strdup("unnamed.bin");
+
+    ww_world_load(&ctx.world, path);
     
     const int
         wx = SDL_WINDOWPOS_CENTERED,
         wy = SDL_WINDOWPOS_CENTERED,
 
-        ww = WW_SIZE * WW_SCALE,
-        wh = WW_SIZE * WW_SCALE;
+        ww = WW_PIXELSIZE,
+        wh = WW_PIXELSIZE;
     
     const Uint32
         rflags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
     
     SDL_Window *window = (SDL_Window *)
-        SDL_CreateWindow("WireWorld", wx, wy, ww, wh, rflags);
+        SDL_CreateWindow(title, wx, wy, ww, wh, rflags);
     
     SDL_assert(window != NULL);
     
@@ -269,6 +296,21 @@ int main(int argc, char **argv) {
                     --brush;
                 }
                 break;
+            
+            case SDL_DROPFILE:
+                ww_world_save(&ctx.world, path);
+
+                SDL_free(path);
+
+                path = event.drop.file;
+
+                ww_world_load(&ctx.world, path);
+
+                strcpy(title, "WireWorld - ");
+                strcat(title, path);
+
+                SDL_SetWindowTitle(window, title);
+                break;
             }
         }
 
@@ -278,12 +320,16 @@ int main(int argc, char **argv) {
 
         ww_render_world(renderer, &ctx.world);
 
-        ww_render_grid(renderer);
+        ww_render_grid(renderer, WW_COLOR_GRID);
 
         ww_render_brush(renderer, brush);
 
         SDL_RenderPresent(renderer);
     }
+
+    ww_world_save(&ctx.world, path);
+
+    SDL_free(path);
 
     SDL_WaitThread(updateThread, NULL);
 
